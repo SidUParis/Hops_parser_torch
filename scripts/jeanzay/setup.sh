@@ -11,7 +11,7 @@ set -euo pipefail
 
 FSWORK="/lustre/fswork/projects/rech/jsl/ucc66vf"
 ENV_DIR="$FSWORK/conda_related/envs/depver"
-PROJECT_DIR="$FSWORK/Projects/hops_parser"
+PROJECT_DIR="$FSWORK/Projects/Hops_parser_torch"
 
 echo "=== DepVer Setup on Jean Zay ==="
 echo "Environment: $ENV_DIR"

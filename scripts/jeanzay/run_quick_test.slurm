@@ -18,7 +18,7 @@
 set -euo pipefail
 
 FSWORK="/lustre/fswork/projects/rech/jsl/ucc66vf"
-PROJECT_DIR="$FSWORK/Projects/hops_parser"
+PROJECT_DIR="$FSWORK/Projects/Hops_parser_torch"
 DATA_DIR="$FSWORK/depver_data"
 MODEL_DIR="$FSWORK/depver_models/en_ewt"
 RESULTS_DIR="$FSWORK/depver_results/quick_$SLURM_JOB_ID"

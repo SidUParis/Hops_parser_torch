@@ -15,7 +15,7 @@
 set -euo pipefail
 
 FSWORK="/lustre/fswork/projects/rech/jsl/ucc66vf"
-PROJECT_DIR="$FSWORK/Projects/hops_parser"
+PROJECT_DIR="$FSWORK/Projects/Hops_parser_torch"
 ENV_DIR="$FSWORK/conda_related/envs/depver"
 
 module purge
