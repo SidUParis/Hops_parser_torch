@@ -21,8 +21,8 @@ set -euo pipefail
 FSWORK="/lustre/fswork/projects/rech/jsl/ucc66vf"
 PROJECT_DIR="$FSWORK/Projects/Hops_parser_torch"
 ENV_DIR="$FSWORK/conda_related/envs/depver"
-UD_DIR="$FSWORK/depver_data/ud"
-MODEL_OUTPUT="$FSWORK/depver_models/en_ewt_roberta"
+UD_DIR="$PROJECT_DIR/data/ud"
+MODEL_OUTPUT="$PROJECT_DIR/models/en_ewt_roberta"
 
 module purge
 module load arch/h100

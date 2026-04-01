@@ -1,0 +1,34 @@
+# Data and models (downloaded locally, not tracked)
+data/
+models/
+depver_data/
+depver_models/
+depver_results/
+results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Environments
+.venv/
+envs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SLURM outputs
+*.out
+*.err

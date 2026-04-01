@@ -3,11 +3,11 @@
 All models are loaded from local paths under DEPVER_MODELS_DIR (no network calls).
 Set this env var or pass models_dir to init_backends() before use.
 
-Default: $WORK/Projects/Hops_parser_torch/models
+Default: ./models (relative to project root)
 Expected layout:
     models/
-    ├── nli/          # cross-encoder/nli-deberta-v3-base (huggingface-cli download)
-    └── embedder/     # sentence-transformers/all-MiniLM-L6-v2 (optional)
+    ├── nli/          # huggingface-cli download cross-encoder/nli-deberta-v3-base --local-dir models/nli
+    └── embedder/     # huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 --local-dir models/embedder (optional)
 """
 
 from __future__ import annotations
@@ -30,10 +30,7 @@ def init_backends(models_dir: str | Path | None = None) -> None:
     if models_dir is not None:
         _models_dir = Path(models_dir)
     else:
-        _models_dir = Path(os.environ.get(
-            "DEPVER_MODELS_DIR",
-            os.path.expandvars("$WORK/Projects/Hops_parser_torch/models"),
-        ))
+        _models_dir = Path(os.environ.get("DEPVER_MODELS_DIR", "models"))
     # Reset so they get re-loaded
     _nli = None
     _embedder = None

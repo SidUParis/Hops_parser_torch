@@ -41,13 +41,13 @@ echo ">>> Downloading NLTK data..."
 python -c "import nltk; nltk.download('wordnet'); nltk.download('omw-1.4')"
 
 # Prepare data
-DATA_DIR="$FSWORK/depver_data"
+DATA_DIR="$PROJECT_DIR/data"
 mkdir -p "$DATA_DIR"
 echo ">>> Downloading datasets to $DATA_DIR ..."
 python experiments/prepare_data.py --output-dir "$DATA_DIR" --dataset all
 
 # Model directory
-MODEL_DIR="$FSWORK/depver_models"
+MODEL_DIR="$PROJECT_DIR/models"
 mkdir -p "$MODEL_DIR"
 
 echo ""
