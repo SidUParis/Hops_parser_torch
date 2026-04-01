@@ -6,31 +6,28 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
-#SBATCH --partition=gpu_p5            # A100 80GB
+#SBATCH --partition=gpu_p5
 #SBATCH --time=04:00:00
-#SBATCH --account=YOUR_PROJECT_ID     # <-- your project, e.g. abc@a100
+#SBATCH --account=jsl@h100
 #SBATCH --qos=qos_gpu-t3
-#SBATCH --constraint=a100
+#SBATCH --constraint=h100
 #
-# DepVer: Full evaluation pipeline on a single A100
-# Runs: unit tests → DepVer on FRANK → DepVer on AggreFact → BERTScore baselines → comparison
-#
-# Usage:
-#   sbatch scripts/jeanzay/run_all_a100.slurm
+# DepVer: Full evaluation pipeline on a single H100
 #
 
 set -euo pipefail
 
-# --- Configuration (edit these if your paths differ) ---
-PROJECT_DIR="$WORK/hops_parser"
-DATA_DIR="$WORK/depver_data"
-MODEL_DIR="$WORK/depver_models/en_ewt"
-RESULTS_DIR="$WORK/depver_results/$SLURM_JOB_ID"
-ENV_DIR="$WORK/envs/depver"
+# --- Configuration ---
+FSWORK="/lustre/fswork/projects/rech/jsl/ucc66vf"
+PROJECT_DIR="$FSWORK/Projects/hops_parser"
+DATA_DIR="$FSWORK/depver_data"
+MODEL_DIR="$FSWORK/depver_models/en_ewt"
+RESULTS_DIR="$FSWORK/depver_results/$SLURM_JOB_ID"
+ENV_DIR="$FSWORK/conda_related/envs/depver"
 
 # --- Setup ---
 module purge
-module load cpuarch/amd
+module load arch/h100
 module load pytorch-gpu/py3/2.4.0
 conda activate "$ENV_DIR"
 cd "$PROJECT_DIR"
@@ -50,7 +47,7 @@ echo ""
 
 mkdir -p "$RESULTS_DIR"
 
-# --- Step 1: Unit tests (catch issues early) ---
+# --- Step 1: Unit tests ---
 echo ""
 echo ">>> Step 1/5: Running unit tests..."
 cd "$PROJECT_DIR/depver"
@@ -101,11 +98,6 @@ fi
 # --- Step 5: Comparison ---
 echo ""
 echo ">>> Step 5/5: Comparison summary..."
-python experiments/run_all.py \
-    --model-path "$MODEL_DIR" \
-    --data-dir "$DATA_DIR" \
-    --output-dir "$RESULTS_DIR" \
-    --device cuda 2>&1 | tail -30
 
 echo ""
 echo "============================================"
@@ -114,7 +106,7 @@ echo "  Results: $RESULTS_DIR"
 echo "  Finished: $(date)"
 echo "============================================"
 
-# Print all metrics files
+# Print all metrics
 echo ""
 echo ">>> All metrics:"
 find "$RESULTS_DIR" -name "metrics.json" -exec echo "--- {} ---" \; -exec cat {} \; -exec echo "" \;
