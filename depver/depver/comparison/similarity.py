@@ -199,7 +199,11 @@ def _nli_entity_similarity(text_a: str, text_b: str) -> float | None:
 
 
 def _load_nli():
-    """Lazy-load the NLI model. Returns (model, tokenizer) or (None, None)."""
+    """Lazy-load the NLI model. Returns (model, tokenizer) or (None, None).
+
+    Uses local_files_only=True first (for offline/compute nodes),
+    falls back to downloading if that fails.
+    """
     global _nli_model, _nli_tokenizer
     if _nli_model is False:
         return None, None
@@ -209,11 +213,17 @@ def _load_nli():
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         model_name = "cross-encoder/nli-deberta-v3-base"
-        _nli_tokenizer = AutoTokenizer.from_pretrained(model_name)
-        _nli_model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        # Try offline first (works on compute nodes with pre-cached models)
+        try:
+            _nli_tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+            _nli_model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
+        except Exception:
+            # Fall back to downloading (works on login nodes with internet)
+            _nli_tokenizer = AutoTokenizer.from_pretrained(model_name)
+            _nli_model = AutoModelForSequenceClassification.from_pretrained(model_name)
         _nli_model.eval()
         return _nli_model, _nli_tokenizer
-    except (ImportError, OSError):
+    except Exception:
         _nli_model = False
         _nli_tokenizer = None
         return None, None
