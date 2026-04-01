@@ -8,34 +8,34 @@ import sys
 from pathlib import Path
 
 
+def _add_common_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--model", required=True, help="Path to hopsparser model")
+    p.add_argument("--device", default="cpu", help="Device (cpu/cuda)")
+    p.add_argument("--models-dir", default=None, help="Path to depver models (nli/, embedder/)")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DepVer: Dependency-structure verification of LLM outputs",
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    # verify command
     verify_parser = subparsers.add_parser("verify", help="Verify generated text against source")
-    verify_parser.add_argument("--model", required=True, help="Path to hopsparser model")
+    _add_common_args(verify_parser)
     verify_parser.add_argument("--source", required=True, help="Source text file")
     verify_parser.add_argument("--generated", required=True, help="Generated text file")
-    verify_parser.add_argument("--device", default="cpu", help="Device (cpu/cuda)")
-    verify_parser.add_argument("--threshold", type=float, default=0.4, help="Alignment threshold")
+    verify_parser.add_argument("--threshold", type=float, default=0.4)
     verify_parser.add_argument("--format", choices=["text", "json"], default="text")
 
-    # verify-batch command
     batch_parser = subparsers.add_parser("verify-batch", help="Verify a JSONL file of pairs")
-    batch_parser.add_argument("--model", required=True, help="Path to hopsparser model")
+    _add_common_args(batch_parser)
     batch_parser.add_argument("--input", required=True, help="JSONL file with source/generated")
     batch_parser.add_argument("--output", required=True, help="Output JSONL file")
-    batch_parser.add_argument("--device", default="cpu", help="Device (cpu/cuda)")
     batch_parser.add_argument("--threshold", type=float, default=0.4)
 
-    # extract command (extract triples only)
     extract_parser = subparsers.add_parser("extract", help="Extract triples from text")
-    extract_parser.add_argument("--model", required=True, help="Path to hopsparser model")
+    _add_common_args(extract_parser)
     extract_parser.add_argument("--input", required=True, help="Input text file")
-    extract_parser.add_argument("--device", default="cpu")
 
     args = parser.parse_args()
 
@@ -55,7 +55,7 @@ def _cmd_verify(args):
     from depver.pipeline import DepVerifier
     from depver.scoring.report import format_report, format_json_report
 
-    verifier = DepVerifier.from_pretrained(args.model, device=args.device)
+    verifier = DepVerifier.from_pretrained(args.model, device=args.device, models_dir=args.models_dir)
 
     source_text = Path(args.source).read_text()
     generated_text = Path(args.generated).read_text()
@@ -72,7 +72,7 @@ def _cmd_verify_batch(args):
     from depver.pipeline import DepVerifier
     from depver.scoring.report import format_json_report
 
-    verifier = DepVerifier.from_pretrained(args.model, device=args.device)
+    verifier = DepVerifier.from_pretrained(args.model, device=args.device, models_dir=args.models_dir)
 
     with open(args.input) as f_in, open(args.output, "w") as f_out:
         for line_num, line in enumerate(f_in):
@@ -80,15 +80,9 @@ def _cmd_verify_batch(args):
             if not line:
                 continue
             record = json.loads(line)
-            source = record["source"]
-            generated = record["generated"]
-
-            result = verifier.verify(source, generated, threshold=args.threshold)
+            result = verifier.verify(record["source"], record["generated"], threshold=args.threshold)
             report = format_json_report(result)
             report["id"] = record.get("id", line_num)
-            report["source"] = source
-            report["generated"] = generated
-
             f_out.write(json.dumps(report) + "\n")
 
             if (line_num + 1) % 100 == 0:
@@ -100,7 +94,7 @@ def _cmd_verify_batch(args):
 def _cmd_extract(args):
     from depver.pipeline import DepVerifier
 
-    verifier = DepVerifier.from_pretrained(args.model, device=args.device)
+    verifier = DepVerifier.from_pretrained(args.model, device=args.device, models_dir=args.models_dir)
 
     text = Path(args.input).read_text()
     graphs = verifier.parse_text(text)

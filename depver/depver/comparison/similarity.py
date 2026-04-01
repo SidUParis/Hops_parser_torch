@@ -1,48 +1,64 @@
 """Similarity functions for predicates and entities.
 
-Supports multiple backends, auto-detected at runtime:
-  1. NLI model (best for predicate entailment — "reported" vs "confirmed")
-  2. Sentence-transformers embeddings (good for paraphrase detection)
-  3. WordNet (decent for synonyms, limited coverage)
-  4. Character overlap (last resort fallback)
+All models are loaded from local paths under DEPVER_MODELS_DIR (no network calls).
+Set this env var or pass models_dir to init_backends() before use.
+
+Default: $WORK/Projects/Hops_parser_torch/models
+Expected layout:
+    models/
+    ├── nli/          # cross-encoder/nli-deberta-v3-base (huggingface-cli download)
+    └── embedder/     # sentence-transformers/all-MiniLM-L6-v2 (optional)
 """
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import torch
 from depver.schema import Entity
 
-# Lazy-loaded backends (None = not tried, False = tried and unavailable)
-_nli_model = None
-_nli_tokenizer = None
-_wordnet = None
-_embedder = None
+
+_nli = None       # (model, tokenizer) or False
+_embedder = None  # SentenceTransformer or False
+_models_dir: Path | None = None
+
+
+def init_backends(models_dir: str | Path | None = None) -> None:
+    """Initialize model backends from a local directory. Call once at startup."""
+    global _models_dir, _nli, _embedder
+    if models_dir is not None:
+        _models_dir = Path(models_dir)
+    else:
+        _models_dir = Path(os.environ.get(
+            "DEPVER_MODELS_DIR",
+            os.path.expandvars("$WORK/Projects/Hops_parser_torch/models"),
+        ))
+    # Reset so they get re-loaded
+    _nli = None
+    _embedder = None
+
+
+def _get_models_dir() -> Path:
+    global _models_dir
+    if _models_dir is None:
+        init_backends()
+    return _models_dir  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 def predicate_similarity(lemma_a: str, lemma_b: str) -> float:
-    """Similarity between two predicate lemmas.
-
-    Cascade: exact → NLI entailment → WordNet → embedding cosine → char overlap.
-    """
+    """Similarity between two predicate lemmas."""
     if lemma_a.lower() == lemma_b.lower():
         return 1.0
-
-    # NLI entailment: "he reported" → "he confirmed"?
-    nli_score = _nli_predicate_entailment(lemma_a, lemma_b)
-    if nli_score is not None:
-        return nli_score
-
-    # WordNet synonyms
-    wn_score = _wordnet_similarity(lemma_a, lemma_b)
-    if wn_score is not None:
-        return wn_score
-
-    # Embedding cosine
-    emb_score = _embedding_similarity(lemma_a, lemma_b)
-    if emb_score is not None:
-        return emb_score * 0.8  # discount embedding-only matches
-
-    # Fallback
-    return _char_overlap(lemma_a, lemma_b)
+    return _nli_similarity(
+        f"A person {lemma_a} something.",
+        f"A person {lemma_b} something.",
+    )
 
 
 def entity_similarity(a: Entity | None, b: Entity | None) -> float:
@@ -52,44 +68,30 @@ def entity_similarity(a: Entity | None, b: Entity | None) -> float:
     if a is None or b is None:
         return 0.0
 
-    # Head lemma
     if a.head_lemma.lower() == b.head_lemma.lower():
         head_sim = 1.0
     else:
-        # Try NLI: "the reform" entails "the legislative change"?
-        nli = _nli_entity_similarity(a.head_lemma, b.head_lemma)
-        if nli is not None:
-            head_sim = nli
-        else:
-            emb = _embedding_similarity(a.head_lemma, b.head_lemma)
-            head_sim = emb if emb is not None else _char_overlap(a.head_lemma, b.head_lemma)
+        head_sim = _nli_similarity(
+            f"They discussed the {a.head_lemma}.",
+            f"They discussed the {b.head_lemma}.",
+        )
 
-    # Modifier overlap (ignore determiners)
     a_mods = {m.text.lower() for m in a.modifiers if m.deprel != "det"}
     b_mods = {m.text.lower() for m in b.modifiers if m.deprel != "det"}
-    if a_mods or b_mods:
-        mod_overlap = len(a_mods & b_mods) / max(len(a_mods | b_mods), 1)
-    else:
-        mod_overlap = 1.0
+    mod_overlap = _set_overlap(a_mods, b_mods)
 
-    # nmod chain overlap
     a_nmod = {e.head_lemma.lower() for e in a.nmod_chain}
     b_nmod = {e.head_lemma.lower() for e in b.nmod_chain}
-    if a_nmod or b_nmod:
-        nmod_overlap = len(a_nmod & b_nmod) / max(len(a_nmod | b_nmod), 1)
-    else:
-        nmod_overlap = 1.0
+    nmod_overlap = _set_overlap(a_nmod, b_nmod)
 
     return 0.6 * head_sim + 0.25 * mod_overlap + 0.15 * nmod_overlap
 
 
 def polarity_match(neg_a: bool, neg_b: bool) -> float:
-    """Binary: same polarity = 1.0, different = 0.0."""
     return 1.0 if neg_a == neg_b else 0.0
 
 
 def oblique_similarity(obliques_a: tuple, obliques_b: tuple) -> float:
-    """Similarity between oblique argument lists."""
     if not obliques_a and not obliques_b:
         return 1.0
     if not obliques_a or not obliques_b:
@@ -112,208 +114,67 @@ def oblique_similarity(obliques_a: tuple, obliques_b: tuple) -> float:
             matched += best_score
             used.add(best_idx)
 
-    total = max(len(obliques_a), len(obliques_b))
-    return matched / total if total > 0 else 1.0
+    return matched / max(len(obliques_a), len(obliques_b))
 
 
 # ---------------------------------------------------------------------------
-# Backend: NLI model (DeBERTa-v3-base fine-tuned on MNLI)
-# ---------------------------------------------------------------------------
-# This is the key learned component. A small NLI model (~180M params) answers:
-#   "Does 'Someone reported X' entail 'Someone confirmed X'?"
-# This handles predicate entailment, entity coreference-by-description, and
-# paraphrase detection — all things rules can't do well.
-#
-# Model: cross-encoder/nli-deberta-v3-base (~350MB, runs fast on CPU/GPU)
-# We frame it as: premise = "A person [verb_a] something" → hypothesis = same with [verb_b]
-# Then read the entailment/contradiction/neutral probabilities.
+# NLI backend
 # ---------------------------------------------------------------------------
 
 
-def _nli_predicate_entailment(lemma_a: str, lemma_b: str) -> float | None:
-    """Use NLI to check if predicate A entails predicate B.
-
-    Frames as: "Someone [A] something." entails "Someone [B] something."?
-    Returns a score in [0, 1] or None if NLI model unavailable.
-    """
+def _nli_similarity(premise: str, hypothesis: str) -> float:
+    """Score how much premise entails hypothesis using NLI. Falls back to 0.5."""
     model, tokenizer = _load_nli()
     if model is None:
-        return None
-
-    import torch
-
-    premise = f"A person {lemma_a} something."
-    hypothesis = f"A person {lemma_b} something."
+        return 0.5
 
     inputs = tokenizer(premise, hypothesis, return_tensors="pt", truncation=True, max_length=128)
     with torch.inference_mode():
-        outputs = model(**inputs)
-        probs = torch.softmax(outputs.logits, dim=-1)[0]
+        probs = torch.softmax(model(**inputs).logits, dim=-1)[0]
 
-    # DeBERTa MNLI labels: 0=contradiction, 1=neutral, 2=entailment
-    contradiction = probs[0].item()
-    neutral = probs[1].item()
-    entailment = probs[2].item()
+    # labels: 0=contradiction, 1=neutral, 2=entailment
+    contradiction, neutral, entailment = probs[0].item(), probs[1].item(), probs[2].item()
 
-    # Contradictory predicates (reported ↔ denied) → low score
     if contradiction > 0.7:
         return 0.1
-    # Entailed predicates (reported ↔ said) → high score
     if entailment > 0.6:
         return 0.85
-    # Neutral (reported ↔ worked) → moderate
-    if neutral > 0.5:
-        return 0.3
-
-    # Mixed — use weighted combination
     return 0.1 * contradiction + 0.4 * neutral + 0.85 * entailment
 
 
-def _nli_entity_similarity(text_a: str, text_b: str) -> float | None:
-    """Use NLI to check if two entity descriptions refer to the same thing.
-
-    "the reform" vs "the legislative change"
-    """
-    model, tokenizer = _load_nli()
-    if model is None:
-        return None
-
-    import torch
-
-    premise = f"They discussed the {text_a}."
-    hypothesis = f"They discussed the {text_b}."
-
-    inputs = tokenizer(premise, hypothesis, return_tensors="pt", truncation=True, max_length=128)
-    with torch.inference_mode():
-        outputs = model(**inputs)
-        probs = torch.softmax(outputs.logits, dim=-1)[0]
-
-    entailment = probs[2].item()
-    contradiction = probs[0].item()
-
-    if contradiction > 0.7:
-        return 0.1
-    if entailment > 0.6:
-        return 0.85
-    return 0.3 + 0.55 * entailment
-
-
 def _load_nli():
-    """Lazy-load the NLI model. Returns (model, tokenizer) or (None, None).
-
-    Uses local_files_only=True first (for offline/compute nodes),
-    falls back to downloading if that fails.
-    """
-    global _nli_model, _nli_tokenizer
-    if _nli_model is False:
+    """Load NLI model from local path. Returns (model, tokenizer) or (None, None)."""
+    global _nli
+    if _nli is False:
         return None, None
-    if _nli_model is not None:
-        return _nli_model, _nli_tokenizer
+    if _nli is not None:
+        return _nli
+
+    nli_path = _get_models_dir() / "nli"
+    if not nli_path.exists():
+        _nli = False
+        return None, None
+
     try:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-        model_name = "cross-encoder/nli-deberta-v3-base"
-        # Try offline first (works on compute nodes with pre-cached models)
-        try:
-            _nli_tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-            _nli_model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
-        except Exception:
-            # Fall back to downloading (works on login nodes with internet)
-            _nli_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            _nli_model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        _nli_model.eval()
-        return _nli_model, _nli_tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(nli_path)
+        model = AutoModelForSequenceClassification.from_pretrained(nli_path)
+        model.eval()
+        _nli = (model, tokenizer)
+        return _nli
     except Exception:
-        _nli_model = False
-        _nli_tokenizer = None
+        _nli = False
         return None, None
 
 
 # ---------------------------------------------------------------------------
-# Backend: WordNet
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-def _wordnet_similarity(lemma_a: str, lemma_b: str) -> float | None:
-    """Check WordNet synonym/hypernym similarity. Returns None if unavailable."""
-    global _wordnet
-    if _wordnet is False:
-        return None
-    try:
-        if _wordnet is None:
-            from nltk.corpus import wordnet as wn
-            _wordnet = wn
-        else:
-            wn = _wordnet
-
-        synsets_a = wn.synsets(lemma_a.lower(), pos=wn.VERB)
-        synsets_b = wn.synsets(lemma_b.lower(), pos=wn.VERB)
-        if not synsets_a or not synsets_b:
-            # Try nouns too
-            synsets_a = wn.synsets(lemma_a.lower())
-            synsets_b = wn.synsets(lemma_b.lower())
-        if not synsets_a or not synsets_b:
-            return None
-
-        # Exact synonym (share a synset)
-        set_a = {s.name() for s in synsets_a}
-        set_b = {s.name() for s in synsets_b}
-        if set_a & set_b:
-            return 0.85
-
-        # Path similarity
-        best = 0.0
-        for sa in synsets_a[:3]:
-            for sb in synsets_b[:3]:
-                sim = sa.path_similarity(sb)
-                if sim is not None and sim > best:
-                    best = sim
-        if best > 0.3:
-            return 0.5 + 0.35 * best
-        return None
-
-    except (ImportError, LookupError):
-        _wordnet = False
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Backend: Sentence-transformers embeddings
-# ---------------------------------------------------------------------------
-
-
-def _embedding_similarity(text_a: str, text_b: str) -> float | None:
-    """Cosine similarity via sentence-transformers. Returns None if unavailable."""
-    global _embedder
-    if _embedder is False:
-        return None
-    try:
-        if _embedder is None:
-            from sentence_transformers import SentenceTransformer
-            _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
-        embeddings = _embedder.encode([text_a, text_b], convert_to_tensor=True)
-        from sentence_transformers.util import cos_sim
-        score = cos_sim(embeddings[0], embeddings[1]).item()
-        return max(0.0, score)
-
-    except ImportError:
-        _embedder = False
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Fallback: character overlap
-# ---------------------------------------------------------------------------
-
-
-def _char_overlap(a: str, b: str) -> float:
-    """Simple character-level Jaccard as ultimate fallback."""
-    a_lower, b_lower = a.lower(), b.lower()
-    if a_lower == b_lower:
+def _set_overlap(a: set, b: set) -> float:
+    if not a and not b:
         return 1.0
-    a_chars = set(a_lower)
-    b_chars = set(b_lower)
-    if not a_chars or not b_chars:
+    if not a or not b:
         return 0.0
-    return len(a_chars & b_chars) / len(a_chars | b_chars)
+    return len(a & b) / len(a | b)

@@ -14,6 +14,7 @@ from depver.schema import VerificationResult, Triple
 from depver.extraction.triples import extract_triples
 from depver.comparison.matcher import align_triples
 from depver.comparison.divergence import classify_divergences
+from depver.comparison.similarity import init_backends
 from depver.scoring.metrics import compute_scores
 from depver.scoring.report import format_report, format_json_report
 
@@ -21,13 +22,19 @@ from depver.scoring.report import format_report, format_json_report
 class DepVerifier:
     """End-to-end dependency-structure verification of LLM outputs."""
 
-    def __init__(self, parser: BiAffineParser):
+    def __init__(self, parser: BiAffineParser, models_dir: str | Path | None = None):
         self.parser = parser
+        init_backends(models_dir)
 
     @classmethod
-    def from_pretrained(cls, model_path: str, device: str = "cpu") -> DepVerifier:
+    def from_pretrained(
+        cls,
+        model_path: str,
+        device: str = "cpu",
+        models_dir: str | Path | None = None,
+    ) -> DepVerifier:
         parser = BiAffineParser.load(Path(model_path)).to(device).eval()
-        return cls(parser)
+        return cls(parser, models_dir=models_dir)
 
     def parse_text(self, text: str) -> list[DepGraph]:
         """Parse raw text into dependency graphs (one per line)."""

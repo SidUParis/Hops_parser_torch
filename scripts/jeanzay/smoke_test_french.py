@@ -59,20 +59,24 @@ TEST_PAIRS = [
 def main():
     parser = argparse.ArgumentParser(description="French smoke test for DepVer")
     parser.add_argument("--model-path", type=str, required=True, help="Path to French hopsparser model")
+    parser.add_argument("--models-dir", type=str, default=None, help="Path to depver models (nli/, embedder/)")
     parser.add_argument("--device", default="cpu", help="cpu or cuda")
     args = parser.parse_args()
 
     print("=" * 60)
     print("  DepVer French Smoke Test")
     print("=" * 60)
-    print(f"Model:  {args.model_path}")
-    print(f"Device: {args.device}")
+    print(f"Model:      {args.model_path}")
+    print(f"Models dir: {args.models_dir or '$DEPVER_MODELS_DIR or default'}")
+    print(f"Device:     {args.device}")
     print()
 
     # Step 1: Load model
     print("Loading hopsparser model...")
     try:
-        verifier = DepVerifier.from_pretrained(args.model_path, device=args.device)
+        verifier = DepVerifier.from_pretrained(
+            args.model_path, device=args.device, models_dir=args.models_dir,
+        )
         print("  OK — model loaded.\n")
     except Exception as e:
         print(f"  FAILED: {e}")
